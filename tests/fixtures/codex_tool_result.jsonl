@@ -1,0 +1,4 @@
+{"timestamp":"2026-01-10T12:00:00Z","type":"session_meta","payload":{"cwd":"/workspace/project","model":"gpt-5-codex"}}
+{"timestamp":"2026-01-10T12:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Show me README.md"}]}}
+{"timestamp":"2026-01-10T12:00:02Z","type":"response_item","payload":{"type":"tool_result","role":"user","tool_name":"read_file","output":{"path":"README.md","content":"# Title\\nHello"}}}
+{"timestamp":"2026-01-10T12:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Here it is."}]}}

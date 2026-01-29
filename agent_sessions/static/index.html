@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sessions</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script type="module" src="/static/js/index-page.js"></script>
+  </head>
+  <body class="is-loading">
+    <div id="app-loading" class="app-loading" role="status" aria-live="polite">
+      Loading…
+    </div>
+    <div id="app-root">
+      <header class="global-header">
+        <div class="global-header__actions">
+          <span
+            class="global-header__back global-header__placeholder"
+            aria-hidden="true"
+            >&larr; Back to all sessions</span
+          >
+        </div>
+        <div class="global-header__actions">
+          <button type="button" id="theme-toggle" aria-pressed="false">
+            Dark mode
+          </button>
+        </div>
+      </header>
+      <div class="page-title">
+        <h1>Sessions</h1>
+      </div>
+      <div class="controls page-subheader">
+        <fieldset class="filter-panel" id="working-dir-panel">
+          <legend class="visually-hidden">Working directories</legend>
+          <div
+            class="filter-header"
+            id="working-dir-header"
+            role="button"
+            tabindex="0"
+            aria-controls="working-dir-body"
+            aria-expanded="true"
+          >
+            <span class="filter-title">Working directories</span>
+            <button
+              type="button"
+              id="working-dir-toggle"
+              disabled
+              aria-pressed="false"
+            >
+              Select all
+            </button>
+          </div>
+          <div class="filter-body" id="working-dir-body" role="group" aria-label="Working directory filter">
+            <div id="working-dir-list" class="filter-list"></div>
+          </div>
+        </fieldset>
+        <fieldset class="filter-panel" id="provider-panel">
+          <legend class="visually-hidden">Providers</legend>
+          <div
+            class="filter-header"
+            id="provider-header"
+            role="button"
+            tabindex="0"
+            aria-controls="provider-body"
+            aria-expanded="true"
+          >
+            <span class="filter-title">Providers</span>
+          </div>
+          <div class="filter-body" id="provider-body" role="group" aria-label="Provider filter">
+            <div class="toolbar" id="provider-toolbar"></div>
+          </div>
+        </fieldset>
+        <input
+          type="search"
+          id="session-search"
+          placeholder="Search sessions (exact match)"
+          aria-label="Search sessions"
+        />
+      </div>
+      <div class="sessions-wrapper">
+        <table class="sessions-table">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Session</th>
+              <th>Last Update</th>
+              <th>Last Message</th>
+              <th>Working Dir</th>
+              <th>Messages</th>
+            </tr>
+          </thead>
+          <tbody id="sessions-body"></tbody>
+        </table>
+      </div>
+      <div class="pagination" aria-live="polite">
+        <button type="button" id="page-prev" disabled>Previous</button>
+        <span id="page-info"></span>
+        <button type="button" id="page-next" disabled>Next</button>
+      </div>
+    </div>
+    <noscript>
+      <style>
+        #app-root {
+          display: block !important;
+        }
+        #app-loading {
+          display: none !important;
+        }
+      </style>
+      <p class="empty">
+        JavaScript is required to load sessions. Enable it and refresh.
+      </p>
+    </noscript>
+  </body>
+</html>

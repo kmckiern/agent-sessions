@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-sessions"
+version = "0.1.0"
+description = "Local web viewer for terminal AI agent sessions."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Kerim McKiernan"}
+]
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/kmckiern/session-viewer"
+Repository = "https://github.com/kmckiern/session-viewer"
+Issues = "https://github.com/kmckiern/session-viewer/issues"
+
+[project.scripts]
+agent-sessions = "agent_sessions.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "ruff>=0.6",
+  "pyright>=1.1",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["agent_sessions", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E203"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.setuptools.packages.find]
+include = ["agent_sessions*"]
+
+[tool.setuptools]
+license-files = ["LICENSE"]
+
+[tool.setuptools.package-data]
+agent_sessions = ["static/**/*"]
+
+[tool.pyright]
+include = ["agent_sessions", "tests", "scripts"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+venvPath = "."
+venv = ".venv"

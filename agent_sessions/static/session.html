@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Session Detail</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script type="module" src="/static/js/session-page.js"></script>
+  </head>
+  <body class="is-loading">
+    <div id="app-loading" class="app-loading" role="status" aria-live="polite">
+      Loading…
+    </div>
+    <div id="app-root">
+      <header class="global-header">
+        <div class="global-header__actions">
+          <a class="global-header__back" href="/"
+            >&larr; Back to all sessions</a
+          >
+        </div>
+        <div class="global-header__actions">
+          <button type="button" id="theme-toggle" aria-pressed="false">
+            Dark mode
+          </button>
+        </div>
+      </header>
+      <div class="page-title">
+        <h1 id="session-title"></h1>
+        <button
+          type="button"
+          id="session-copy"
+          class="copy-session"
+          data-session-id=""
+          disabled
+          aria-label="Copy session id"
+        >
+          Copy
+        </button>
+      </div>
+      <div class="meta page-subheader">
+        <div><strong>Provider:</strong> <span id="meta-provider">—</span></div>
+        <div><strong>Model:</strong> <span id="meta-model">—</span></div>
+        <div>
+          <strong>Working dir:</strong> <span id="meta-working-dir">—</span>
+        </div>
+        <div><strong>Started:</strong> <span id="meta-started">—</span></div>
+        <div>
+          <strong>Last update:</strong> <span id="meta-updated">—</span>
+        </div>
+        <div>
+          <strong>Message count:</strong> <span id="meta-messages">0</span>
+        </div>
+        <div><strong>Source file:</strong> <span id="meta-source">—</span></div>
+      </div>
+      <div class="detail-table-actions">
+        <button
+          type="button"
+          id="session-copy-table"
+          class="copy-table"
+          disabled
+          aria-label="Copy table data"
+        >
+          Copy
+        </button>
+      </div>
+      <table class="detail-table">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Role</th>
+            <th>Content</th>
+          </tr>
+        </thead>
+        <tbody id="message-body"></tbody>
+      </table>
+    </div>
+    <noscript>
+      <style>
+        #app-root {
+          display: block !important;
+        }
+        #app-loading {
+          display: none !important;
+        }
+      </style>
+      <p class="empty">JavaScript is required to render the session detail.</p>
+    </noscript>
+  </body>
+</html>
