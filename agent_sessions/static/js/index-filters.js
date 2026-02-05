@@ -1,34 +1,44 @@
 /**
- * Wire up filter controls (search, collapsible panels, pagination).
+ * Wire up filter controls (search/model inputs, reset, pagination).
  */
 export function initFilterControls(dom, state, callbacks) {
-  let workingDirsCollapsed = true;
+  let filtersGroupCollapsed = true;
   let providersCollapsed = true;
+  let modelsCollapsed = true;
+  let workingDirsCollapsed = true;
   let searchTimer;
+  let modelTimer;
 
-  function setWorkingDirCollapsed(collapsed) {
-    workingDirsCollapsed = collapsed;
+  dom.searchInput.value = state.search || "";
+  dom.modelInput.value = state.modelValue || "";
+  dom.modelMatchMode.value =
+    state.modelMatchMode === "exact" ? "exact" : "prefix";
+  dom.modelProviderFilter.value = state.modelProvider || "";
+
+  function setCollapsed(body, header, collapsed) {
     if (collapsed) {
-      dom.workingDirBody.classList.add("collapsed");
-      dom.workingDirBody.setAttribute("aria-hidden", "true");
-      dom.workingDirHeader.setAttribute("aria-expanded", "false");
+      body.classList.add("collapsed");
+      body.setAttribute("aria-hidden", "true");
+      header.setAttribute("aria-expanded", "false");
     } else {
-      dom.workingDirBody.classList.remove("collapsed");
-      dom.workingDirBody.setAttribute("aria-hidden", "false");
-      dom.workingDirHeader.setAttribute("aria-expanded", "true");
+      body.classList.remove("collapsed");
+      body.setAttribute("aria-hidden", "false");
+      header.setAttribute("aria-expanded", "true");
     }
   }
 
-  function setProviderCollapsed(collapsed) {
-    providersCollapsed = collapsed;
+  function setFiltersGroupCollapsed(collapsed) {
+    filtersGroupCollapsed = collapsed;
     if (collapsed) {
-      dom.providerBody.classList.add("collapsed");
-      dom.providerBody.setAttribute("aria-hidden", "true");
-      dom.providerHeader.setAttribute("aria-expanded", "false");
+      dom.filtersGroupBody.classList.add("collapsed");
+      dom.filtersGroupBody.setAttribute("aria-hidden", "true");
+      dom.filtersGroupToggle.setAttribute("aria-expanded", "false");
+      dom.filtersGroupToggle.textContent = "Filters";
     } else {
-      dom.providerBody.classList.remove("collapsed");
-      dom.providerBody.setAttribute("aria-hidden", "false");
-      dom.providerHeader.setAttribute("aria-expanded", "true");
+      dom.filtersGroupBody.classList.remove("collapsed");
+      dom.filtersGroupBody.setAttribute("aria-hidden", "false");
+      dom.filtersGroupToggle.setAttribute("aria-expanded", "true");
+      dom.filtersGroupToggle.textContent = "Filters";
     }
   }
 
@@ -54,26 +64,69 @@ export function initFilterControls(dom, state, callbacks) {
     });
   }
 
-  dom.workingDirToggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    callbacks.onToggleAllWorkingDirs();
+  bindCollapsibleHeader(dom.providerHeader, () => {
+    providersCollapsed = !providersCollapsed;
+    setCollapsed(dom.providerBody, dom.providerHeader, providersCollapsed);
+  }, "#provider-toggle");
+
+  bindCollapsibleHeader(dom.modelHeader, () => {
+    modelsCollapsed = !modelsCollapsed;
+    setCollapsed(dom.modelBody, dom.modelHeader, modelsCollapsed);
+  }, "#model-toggle");
+
+  bindCollapsibleHeader(
+    dom.workingDirHeader,
+    () => {
+      workingDirsCollapsed = !workingDirsCollapsed;
+      setCollapsed(dom.workingDirBody, dom.workingDirHeader, workingDirsCollapsed);
+    },
+    "#working-dir-toggle"
+  );
+
+  setCollapsed(dom.providerBody, dom.providerHeader, true);
+  setCollapsed(dom.modelBody, dom.modelHeader, true);
+  setCollapsed(dom.workingDirBody, dom.workingDirHeader, true);
+  setFiltersGroupCollapsed(true);
+
+  dom.filtersGroupToggle.addEventListener("click", () => {
+    setFiltersGroupCollapsed(!filtersGroupCollapsed);
   });
 
-  bindCollapsibleHeader(dom.workingDirHeader, () =>
-    setWorkingDirCollapsed(!workingDirsCollapsed),
-  "#working-dir-toggle");
-  bindCollapsibleHeader(dom.providerHeader, () =>
-    setProviderCollapsed(!providersCollapsed));
+  dom.workingDirToggle.addEventListener("click", () => {
+    callbacks.onToggleAllWorkingDirs();
+  });
+  dom.providerToggle.addEventListener("click", () => {
+    callbacks.onToggleAllProviders();
+  });
+  dom.modelToggle.addEventListener("click", () => {
+    callbacks.onToggleAllModels();
+  });
 
-  setWorkingDirCollapsed(true);
-  setProviderCollapsed(true);
+  dom.searchInput.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      callbacks.onSearchChange(dom.searchInput.value.trim());
+    }, 180);
+  });
 
-  if (dom.searchInput) {
-    dom.searchInput.addEventListener("input", () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => {
-        callbacks.onSearchChange(dom.searchInput.value.trim());
-      }, 200);
+  dom.modelInput.addEventListener("input", () => {
+    clearTimeout(modelTimer);
+    modelTimer = setTimeout(() => {
+      callbacks.onModelChange(dom.modelInput.value.trim());
+    }, 180);
+  });
+
+  dom.modelMatchMode.addEventListener("change", () => {
+    callbacks.onModelModeChange(dom.modelMatchMode.value);
+  });
+
+  dom.modelProviderFilter.addEventListener("change", () => {
+    callbacks.onModelProviderChange(dom.modelProviderFilter.value);
+  });
+
+  if (dom.resetFilters) {
+    dom.resetFilters.addEventListener("click", () => {
+      callbacks.onResetAll();
     });
   }
 
@@ -88,6 +141,4 @@ export function initFilterControls(dom, state, callbacks) {
       callbacks.onPageChange(state.page + 1);
     }
   });
-
-  return { setWorkingDirCollapsed, setProviderCollapsed };
 }

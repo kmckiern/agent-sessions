@@ -36,7 +36,7 @@ agent-sessions = "agent_sessions.cli:main"
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3",
-  "ruff>=0.6",
+  "ruff==0.14.2",
   "pyright>=1.1",
 ]
 

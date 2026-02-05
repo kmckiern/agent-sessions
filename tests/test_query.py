@@ -11,6 +11,7 @@ from agent_sessions.query import (
     ORDER_UPDATED_AT,
     SessionQuery,
     apply_filters,
+    matches_model,
     matches_provider,
     matches_search,
     matches_working_dir,
@@ -26,6 +27,7 @@ def make_session(
     updated_at: datetime | None,
     messages: list[Message] | None = None,
     working_dir: str | None = "/work",
+    model: str | None = "model",
 ) -> SessionRecord:
     return SessionRecord(
         provider=provider,
@@ -34,7 +36,7 @@ def make_session(
         started_at=started_at,
         updated_at=updated_at,
         working_dir=working_dir,
-        model="model",
+        model=model,
         messages=messages or [],
     )
 
@@ -43,6 +45,9 @@ def test_session_query_normalizes_defaults() -> None:
     query = SessionQuery(
         providers={"", "claude-code"},
         search="  demo  ",
+        model_exact={" GPT-5 ", "", "\uf8ffgpt-4o"},
+        model_prefixes={" claude-", ""},
+        model_provider="  openai-codex ",
         order="unknown",
         page=-5,
         page_size=-10,
@@ -51,6 +56,9 @@ def test_session_query_normalizes_defaults() -> None:
 
     assert normalized.providers == {"claude-code"}
     assert normalized.search == "demo"
+    assert normalized.model_exact == {"gpt-5", "gpt-4o"}
+    assert normalized.model_prefixes == {"claude-"}
+    assert normalized.model_provider == "openai-codex"
     assert normalized.order == ORDER_UPDATED_AT
     assert normalized.page == 1
     assert normalized.page_size == 10
@@ -153,6 +161,36 @@ def test_matches_provider_filters_by_set() -> None:
     assert not matches_provider(session, {"openai-codex"})
 
 
+def test_matches_model_supports_exact_and_prefix() -> None:
+    timestamp = datetime(2025, 10, 7, 15, tzinfo=timezone.utc)
+    session = make_session(
+        "s1",
+        provider="openai-codex",
+        started_at=timestamp,
+        updated_at=timestamp,
+        model="GPT-5-Codex",
+    )
+
+    assert matches_model(session, {"gpt-5-codex"}, set(), None)
+    assert matches_model(session, set(), {"gpt-5"}, None)
+    assert not matches_model(session, {"gpt-4o"}, set(), None)
+    assert not matches_model(session, set(), {"claude"}, None)
+
+
+def test_matches_model_applies_optional_provider_filter() -> None:
+    timestamp = datetime(2025, 10, 7, 15, tzinfo=timezone.utc)
+    session = make_session(
+        "s1",
+        provider="openai-codex",
+        started_at=timestamp,
+        updated_at=timestamp,
+        model="gpt-5-codex",
+    )
+
+    assert matches_model(session, set(), set(), "openai-codex")
+    assert not matches_model(session, set(), set(), "claude-code")
+
+
 def test_matches_working_dir_handles_include_and_exclude() -> None:
     timestamp = datetime(2025, 10, 7, 15, tzinfo=timezone.utc)
     session = make_session(
@@ -212,6 +250,7 @@ def test_apply_filters_combines_all_predicates() -> None:
             provider="gemini-cli",
             started_at=timestamp,
             updated_at=timestamp,
+            model="gemini-2.0-pro",
             messages=[Message(role="assistant", content="Keyword", created_at=timestamp)],
         ),
         make_session(
@@ -219,9 +258,14 @@ def test_apply_filters_combines_all_predicates() -> None:
             provider="openai-codex",
             started_at=timestamp,
             updated_at=timestamp,
+            model="gpt-5-codex",
         ),
     ]
-    query = SessionQuery(providers={"gemini-cli"}, search="keyword")
+    query = SessionQuery(
+        providers={"gemini-cli"},
+        search="keyword",
+        model_prefixes={"gemini"},
+    )
     filtered = apply_filters(sessions, query)
     assert [session.session_id for session in filtered] == ["match"]
 

@@ -24,6 +24,9 @@ SUPPORTED_ORDERS = {
 class SessionQuery:
     providers: set[str] = field(default_factory=set)
     search: str = ""
+    model_exact: set[str] = field(default_factory=set)
+    model_prefixes: set[str] = field(default_factory=set)
+    model_provider: str | None = None
     order: str = ORDER_UPDATED_AT
     page: int = 1
     page_size: int = 10
@@ -33,6 +36,9 @@ class SessionQuery:
     def normalized(self, *, max_page_size: int | None = None) -> SessionQuery:
         providers = {provider for provider in self.providers if provider}
         search = (self.search or "").strip()
+        model_exact = _normalize_model_values(self.model_exact)
+        model_prefixes = _normalize_model_values(self.model_prefixes)
+        model_provider = (self.model_provider or "").strip() or None
 
         order = self.order or ORDER_UPDATED_AT
         if order not in SUPPORTED_ORDERS:
@@ -63,6 +69,9 @@ class SessionQuery:
         return SessionQuery(
             providers=providers,
             search=search,
+            model_exact=model_exact,
+            model_prefixes=model_prefixes,
+            model_provider=model_provider,
             order=order,
             page=page,
             page_size=page_size,
@@ -119,6 +128,25 @@ def matches_search(session: SessionRecord, term: str) -> bool:
     return index.matches(lowered)
 
 
+def matches_model(
+    session: SessionRecord,
+    model_exact: set[str],
+    model_prefixes: set[str],
+    model_provider: str | None,
+) -> bool:
+    if model_provider and session.provider != model_provider:
+        return False
+    if not model_exact and not model_prefixes:
+        return True
+
+    model = _normalize_model_value(session.model)
+    if not model:
+        return False
+    if model in model_exact:
+        return True
+    return any(model.startswith(prefix) for prefix in model_prefixes)
+
+
 def _sort_key_started(session: SessionRecord) -> float:
     return session.started_at.timestamp() if session.started_at else float("-inf")
 
@@ -147,5 +175,26 @@ def apply_filters(sessions: Iterable[SessionRecord], query: SessionQuery) -> lis
         for session in sessions
         if matches_provider(session, query.providers)
         and matches_search(session, query.search)
+        and matches_model(
+            session,
+            query.model_exact,
+            query.model_prefixes,
+            query.model_provider,
+        )
         and matches_working_dir(session, query.include_working_dirs, query.exclude_working_dirs)
     ]
+
+
+def _normalize_model_values(values: set[str]) -> set[str]:
+    normalized: set[str] = set()
+    for value in values:
+        cleaned = _normalize_model_value(value)
+        if cleaned:
+            normalized.add(cleaned)
+    return normalized
+
+
+def _normalize_model_value(value: str | None) -> str:
+    if not value:
+        return ""
+    return strip_private_use(value).strip().lower()
