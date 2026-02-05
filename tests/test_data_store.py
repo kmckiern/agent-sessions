@@ -16,17 +16,19 @@ def make_record(
     minutes: int,
     *,
     working_dir: str | None = "/workspace",
+    model: str | None = "model",
+    provider: str = "stub",
 ) -> SessionRecord:
     started = datetime(2025, 10, 29, 12, tzinfo=timezone.utc) + timedelta(minutes=minutes)
     updated = started + timedelta(minutes=1)
     return SessionRecord(
-        provider="stub",
+        provider=provider,
         session_id=session_id,
         source_path=Path(f"/tmp/{session_id}.jsonl"),
         started_at=started,
         updated_at=updated,
         working_dir=working_dir,
-        model="model",
+        model=model,
         messages=[
             Message(role="user", content="hi", created_at=started),
             Message(role="assistant", content="hello", created_at=updated),
@@ -163,6 +165,29 @@ def test_session_service_filters_working_dirs() -> None:
     exclude_query = SessionQuery(exclude_working_dirs={"/workspace/b"})
     exclude_page = service.list_sessions(exclude_query)
     assert [record.session_id for record in exclude_page.items] == ["s3", "s1"]
+
+
+def test_session_service_filters_models() -> None:
+    records = [
+        make_record("s1", 0, model="gpt-5-codex", provider="openai-codex"),
+        make_record("s2", 10, model="gpt-4o", provider="openai-codex"),
+        make_record("s3", 20, model="claude-sonnet", provider="claude-code"),
+    ]
+    provider = StubProvider(records)
+    clock = FakeClock()
+    service = SessionService(providers=[provider], refresh_interval=None, clock=clock.now)
+
+    exact_query = SessionQuery(model_exact={"gpt-4o"})
+    exact_page = service.list_sessions(exact_query)
+    assert [record.session_id for record in exact_page.items] == ["s2"]
+
+    prefix_query = SessionQuery(model_prefixes={"gpt-"})
+    prefix_page = service.list_sessions(prefix_query)
+    assert [record.session_id for record in prefix_page.items] == ["s2", "s1"]
+
+    provider_query = SessionQuery(model_prefixes={"gpt-"}, model_provider="claude-code")
+    provider_page = service.list_sessions(provider_query)
+    assert provider_page.items == []
 
 
 def test_session_service_direct_load_short_circuits_cache() -> None:

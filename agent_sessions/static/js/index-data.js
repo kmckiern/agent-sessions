@@ -6,12 +6,13 @@ import { buildSessionQuery } from "./state.js";
  */
 export async function fetchBootstrapData(state) {
   const params = buildSessionQuery(state);
-  const [providers, sessions, workingDirs] = await Promise.allSettled([
+  const [providers, models, sessions, workingDirs] = await Promise.allSettled([
     fetchJSON("/api/providers"),
+    fetchJSON("/api/models"),
     fetchJSON(`/api/sessions?${params.toString()}`),
     fetchJSON("/api/working-dirs"),
   ]);
-  return { providers, sessions, workingDirs };
+  return { providers, models, sessions, workingDirs };
 }
 
 /**

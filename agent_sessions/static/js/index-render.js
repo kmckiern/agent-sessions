@@ -1,6 +1,9 @@
 import { createSessionLink } from "./api.js";
 import { attachCopyHandlers, escapeHtml, formatDate } from "./ui.js";
 
+const QUICK_MODEL_LIMIT = 14;
+const MODEL_NONE_SENTINEL = "__none__";
+
 export function createListRenderer(dom, state) {
   function setLoading(message) {
     dom.tableBody.innerHTML = `<tr><td colspan="7" class="empty">${message}</td></tr>`;
@@ -10,6 +13,7 @@ export function createListRenderer(dom, state) {
     if (!state.providers.length) {
       dom.providerToolbar.innerHTML =
         '<span class="provider-empty">No providers detected.</span>';
+      updateProviderToggleButton();
       return;
     }
 
@@ -32,6 +36,125 @@ export function createListRenderer(dom, state) {
       });
       dom.providerToolbar.appendChild(button);
     });
+    updateProviderToggleButton();
+  }
+
+  function renderModels(onSelect) {
+    if (!state.models.length) {
+      dom.modelToolbar.innerHTML =
+        '<span class="provider-empty">No models detected.</span>';
+      updateModelToggleButton();
+      return;
+    }
+
+    const activeModel = (state.modelValue || "").trim().toLowerCase();
+    const isExactMode = state.modelMatchMode === "exact";
+    const hasModelFilter =
+      activeModel.length > 0 && activeModel !== MODEL_NONE_SENTINEL;
+    const noModelsSelected = activeModel === MODEL_NONE_SENTINEL;
+    dom.modelToolbar.innerHTML = "";
+    state.models.slice(0, QUICK_MODEL_LIMIT).forEach((model) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.model = model.id;
+      button.textContent = `${model.label} (${model.count})`;
+      const modelId = model.id.toLowerCase();
+      let pressed = !hasModelFilter && !noModelsSelected;
+      if (hasModelFilter) {
+        pressed = isExactMode
+          ? modelId === activeModel
+          : modelId.startsWith(activeModel);
+      }
+      button.setAttribute("aria-pressed", String(pressed));
+      button.addEventListener("click", () => {
+        onSelect(model.id);
+      });
+      dom.modelToolbar.appendChild(button);
+    });
+    updateModelToggleButton();
+  }
+
+  function updateProviderToggleButton() {
+    const total = state.providers.length;
+    if (total === 0) {
+      dom.providerToggle.disabled = true;
+      dom.providerToggle.textContent = "Select all";
+      dom.providerToggle.setAttribute("aria-pressed", "false");
+      return;
+    }
+
+    dom.providerToggle.disabled = false;
+    if (state.activeProviders.size === total) {
+      dom.providerToggle.textContent = "Deselect all";
+      dom.providerToggle.setAttribute("aria-pressed", "true");
+    } else {
+      dom.providerToggle.textContent = "Select all";
+      dom.providerToggle.setAttribute("aria-pressed", "false");
+    }
+  }
+
+  function updateModelToggleButton() {
+    const total = state.models.length;
+    if (total === 0) {
+      dom.modelToggle.disabled = true;
+      dom.modelToggle.textContent = "Select all";
+      dom.modelToggle.setAttribute("aria-pressed", "false");
+      return;
+    }
+
+    dom.modelToggle.disabled = false;
+    const activeModel = (state.modelValue || "").trim().toLowerCase();
+    const allSelected = !activeModel && !state.modelProvider;
+    if (allSelected) {
+      dom.modelToggle.textContent = "Deselect all";
+      dom.modelToggle.setAttribute("aria-pressed", "true");
+    } else {
+      dom.modelToggle.textContent = "Select all";
+      dom.modelToggle.setAttribute("aria-pressed", "false");
+    }
+  }
+
+  function renderModelOptions() {
+    if (!dom.modelOptions) {
+      return;
+    }
+    dom.modelOptions.innerHTML = "";
+    state.models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.id;
+      option.label = `${model.label} (${model.count})`;
+      dom.modelOptions.appendChild(option);
+    });
+  }
+
+  function renderModelProviderOptions() {
+    const select = dom.modelProviderFilter;
+    if (!select) {
+      return;
+    }
+
+    const known = new Set();
+    select.innerHTML = "";
+    const anyOption = document.createElement("option");
+    anyOption.value = "";
+    anyOption.textContent = "Any provider";
+    select.appendChild(anyOption);
+
+    state.providers.forEach((provider) => {
+      known.add(provider.id);
+      const option = document.createElement("option");
+      option.value = provider.id;
+      option.textContent = provider.label;
+      select.appendChild(option);
+    });
+
+    if (state.modelProvider && !known.has(state.modelProvider)) {
+      const fallback = document.createElement("option");
+      fallback.value = state.modelProvider;
+      fallback.textContent = state.modelProvider;
+      select.appendChild(fallback);
+    }
+    select.value = state.modelProvider || "";
   }
 
   function updateWorkingDirToggleButton() {
@@ -95,14 +218,89 @@ export function createListRenderer(dom, state) {
     updateWorkingDirToggleButton();
   }
 
+  function renderActiveFilters() {
+    if (!dom.activeFilters) {
+      return;
+    }
+
+    const pills = [];
+    if (state.search && state.search !== "undefined") {
+      pills.push(`Search: ${state.search}`);
+    }
+    if (state.modelValue && state.modelValue !== "undefined") {
+      pills.push(
+        `Model ${state.modelMatchMode === "exact" ? "exact" : "prefix"}: ${
+          state.modelValue
+        }`
+      );
+    }
+    if (state.modelProvider && state.modelProvider !== "undefined") {
+      const provider = state.providers.find(
+        (entry) => entry.id === state.modelProvider
+      );
+      pills.push(`Model provider: ${provider ? provider.label : state.modelProvider}`);
+    }
+
+    const providerIsSubset =
+      state.providers.length > 0 &&
+      state.activeProviders.size !== state.providers.length;
+    if (providerIsSubset) {
+      const labels = state.providers
+        .filter((entry) => state.activeProviders.has(entry.id))
+        .map((entry) => entry.label);
+      if (labels.length === 0) {
+        pills.push("Providers: none selected");
+      } else if (labels.length <= 3) {
+        pills.push(`Providers: ${labels.join(", ")}`);
+      } else {
+        pills.push(`Providers: ${labels.length} selected`);
+      }
+    }
+
+    const workingDirIsSubset =
+      state.workingDirs.length > 0 &&
+      state.selectedWorkingDirs.size !== state.workingDirs.length;
+    if (workingDirIsSubset) {
+      pills.push(
+        `Working dirs: ${state.selectedWorkingDirs.size}/${state.workingDirs.length}`
+      );
+    }
+
+    if (!pills.length) {
+      dom.activeFilters.innerHTML =
+        '<span class="active-filter-empty">No active filters.</span>';
+      return;
+    }
+
+    dom.activeFilters.innerHTML = pills
+      .map((text) => `<span class="active-filter-pill">${escapeHtml(text)}</span>`)
+      .join("");
+  }
+
+  function hasActiveFilters() {
+    const providerIsSubset =
+      state.providers.length > 0 &&
+      state.activeProviders.size !== state.providers.length;
+    const workingDirIsSubset =
+      state.workingDirs.length > 0 &&
+      state.selectedWorkingDirs.size !== state.workingDirs.length;
+    return Boolean(
+      state.search ||
+        state.modelValue ||
+        state.modelProvider ||
+        providerIsSubset ||
+        workingDirIsSubset
+    );
+  }
+
   function renderSessions(payload) {
     if (!payload.sessions.length) {
-      const message =
-        state.activeProviders.size === 0
-          ? "No providers selected"
-          : state.search
-          ? "No matching sessions"
-          : "No sessions available";
+      let message = "No sessions available";
+      if (state.activeProviders.size === 0) {
+        message = "No providers selected";
+      } else if (hasActiveFilters()) {
+        message = "No matching sessions";
+      }
       setLoading(message);
       return;
     }
@@ -142,20 +340,26 @@ export function createListRenderer(dom, state) {
     attachCopyHandlers(dom.tableBody);
   }
 
+  function updateResultsCount(totalSessions) {
+    if (!dom.resultsCount) {
+      return;
+    }
+    const count = Number.isFinite(totalSessions) ? totalSessions : 0;
+    const suffix = count === 1 ? "result" : "results";
+    dom.resultsCount.textContent = `${count} ${suffix}`;
+  }
+
   function updatePagination(meta) {
     state.totalPages = meta.total_pages;
     const displayPage = meta.total_pages === 0 ? 0 : state.page;
     const displayTotal = meta.total_pages;
     const totalSessions = meta.total_sessions;
 
+    updateResultsCount(totalSessions);
     if (displayTotal === 0) {
-      dom.pageInfo.textContent = state.activeProviders.size
-        ? state.search
-          ? "No matching sessions"
-          : "No sessions available"
-        : "No providers selected";
+      dom.pageInfo.textContent = "";
     } else {
-      dom.pageInfo.textContent = `Page ${displayPage} of ${displayTotal} (${totalSessions} sessions)`;
+      dom.pageInfo.textContent = `Page ${displayPage} of ${displayTotal}`;
     }
 
     dom.pagePrev.disabled = displayTotal === 0 || state.page <= 1;
@@ -165,9 +369,16 @@ export function createListRenderer(dom, state) {
   return {
     setLoading,
     renderProviders,
+    renderModels,
+    renderModelOptions,
+    renderModelProviderOptions,
     renderWorkingDirs,
     renderSessions,
+    renderActiveFilters,
     updatePagination,
+    updateResultsCount,
     updateWorkingDirToggleButton,
+    updateProviderToggleButton,
+    updateModelToggleButton,
   };
 }

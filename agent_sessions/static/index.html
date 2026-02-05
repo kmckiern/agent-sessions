@@ -29,52 +29,138 @@
         <h1>Sessions</h1>
       </div>
       <div class="controls page-subheader">
-        <fieldset class="filter-panel" id="working-dir-panel">
-          <legend class="visually-hidden">Working directories</legend>
-          <div
-            class="filter-header"
-            id="working-dir-header"
-            role="button"
-            tabindex="0"
-            aria-controls="working-dir-body"
-            aria-expanded="true"
-          >
-            <span class="filter-title">Working directories</span>
-            <button
-              type="button"
-              id="working-dir-toggle"
-              disabled
-              aria-pressed="false"
+        <button
+          type="button"
+          id="filters-group-toggle"
+          class="filters-group-toggle"
+          aria-controls="filters-group-body"
+          aria-expanded="false"
+        >
+          Filters
+        </button>
+
+        <div id="filters-group-body" class="filters-group-body collapsed" aria-hidden="true">
+          <div class="filters-row">
+            <fieldset class="filter-panel" id="working-dir-panel">
+            <legend class="visually-hidden">Working directories</legend>
+            <div
+              class="filter-header"
+              id="working-dir-header"
+              role="button"
+              tabindex="0"
+              aria-controls="working-dir-body"
+              aria-expanded="true"
             >
-              Select all
-            </button>
+              <span class="filter-title">Working directories</span>
+              <button
+                type="button"
+                id="working-dir-toggle"
+                disabled
+                aria-pressed="false"
+              >
+                Select all
+              </button>
+            </div>
+            <div class="filter-body" id="working-dir-body" role="group" aria-label="Working directory filter">
+              <div id="working-dir-list" class="filter-list"></div>
+            </div>
+            </fieldset>
+
+            <fieldset class="filter-panel" id="provider-panel">
+            <legend class="visually-hidden">Providers</legend>
+            <div
+              class="filter-header"
+              id="provider-header"
+              role="button"
+              tabindex="0"
+              aria-controls="provider-body"
+              aria-expanded="true"
+            >
+              <span class="filter-title">Providers</span>
+              <button
+                type="button"
+                id="provider-toggle"
+                disabled
+                aria-pressed="false"
+              >
+                Select all
+              </button>
+            </div>
+            <div class="filter-body" id="provider-body" role="group" aria-label="Provider filter">
+              <div class="toolbar" id="provider-toolbar"></div>
+            </div>
+            </fieldset>
+
+            <fieldset class="filter-panel" id="model-panel">
+            <legend class="visually-hidden">Models</legend>
+            <div
+              class="filter-header"
+              id="model-header"
+              role="button"
+              tabindex="0"
+              aria-controls="model-body"
+              aria-expanded="true"
+            >
+              <span class="filter-title">Models</span>
+              <button
+                type="button"
+                id="model-toggle"
+                disabled
+                aria-pressed="false"
+              >
+                Select all
+              </button>
+            </div>
+            <div class="filter-body" id="model-body" role="group" aria-label="Model filter">
+              <div class="toolbar" id="model-toolbar"></div>
+              <div class="model-controls">
+                <label class="filter-field" for="model-filter">
+                  <span class="filter-label">Model</span>
+                  <input
+                    type="search"
+                    id="model-filter"
+                    placeholder="e.g. gpt-5-codex"
+                    list="model-options"
+                    aria-label="Model filter"
+                  />
+                  <datalist id="model-options"></datalist>
+                </label>
+
+                <div class="model-controls-inline">
+                  <label class="filter-field filter-field-narrow" for="model-match-mode">
+                    <span class="filter-label">Match</span>
+                    <select id="model-match-mode" aria-label="Model match mode">
+                      <option value="prefix">Prefix</option>
+                      <option value="exact">Exact</option>
+                    </select>
+                  </label>
+
+                  <label class="filter-field" for="model-provider-filter">
+                    <span class="filter-label">Provider</span>
+                    <select id="model-provider-filter" aria-label="Model provider filter">
+                      <option value="">Any provider</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </div>
+            </fieldset>
           </div>
-          <div class="filter-body" id="working-dir-body" role="group" aria-label="Working directory filter">
-            <div id="working-dir-list" class="filter-list"></div>
-          </div>
-        </fieldset>
-        <fieldset class="filter-panel" id="provider-panel">
-          <legend class="visually-hidden">Providers</legend>
-          <div
-            class="filter-header"
-            id="provider-header"
-            role="button"
-            tabindex="0"
-            aria-controls="provider-body"
-            aria-expanded="true"
-          >
-            <span class="filter-title">Providers</span>
-          </div>
-          <div class="filter-body" id="provider-body" role="group" aria-label="Provider filter">
-            <div class="toolbar" id="provider-toolbar"></div>
-          </div>
-        </fieldset>
-        <input
-          type="search"
-          id="session-search"
-          placeholder="Search sessions (exact match)"
-          aria-label="Search sessions"
-        />
+        </div>
+
+        <div class="search-row">
+          <input
+            type="search"
+            id="session-search"
+            placeholder="Search sessions (exact match)"
+            aria-label="Search sessions"
+          />
+        </div>
+        <div class="filters-footer">
+          <div class="results-count" id="results-count" aria-live="polite">0 results</div>
+        </div>
+
+        <div class="active-filters" id="active-filters" aria-live="polite"></div>
       </div>
       <div class="sessions-wrapper">
         <table class="sessions-table">

@@ -34,6 +34,13 @@ class ProviderSummary(TypedDict):
     last_updated: str | None
 
 
+class ModelSummary(TypedDict):
+    id: str
+    label: str
+    count: int
+    providers: list[str]
+
+
 def provider_label(name: str) -> str:
     if not name:
         return "Unknown"
@@ -207,6 +214,9 @@ class SessionApi:
         if path == "/api/providers":
             self.providers(handler)
             return True
+        if path == "/api/models":
+            self.models(handler, params)
+            return True
         if path == "/api/working-dirs":
             self.working_dirs(handler)
             return True
@@ -304,6 +314,40 @@ class SessionApi:
         providers = sorted(summary.values(), key=lambda item: item["label"])
         send_json(handler, {"providers": providers})
 
+    def models(self, handler: BaseHTTPRequestHandler, params: dict[str, list[str]]) -> None:
+        sessions = self.service.all_sessions()
+        provider_filters = {value for value in params.get("provider", []) if value}
+        labels: dict[str, str] = {}
+        counts: dict[str, int] = {}
+        providers_by_model: dict[str, set[str]] = {}
+
+        for session in sessions:
+            if provider_filters and session.provider not in provider_filters:
+                continue
+            model = strip_private_use(session.model).strip() if session.model else ""
+            if not model:
+                continue
+
+            key = model.casefold()
+            labels.setdefault(key, model)
+            counts[key] = counts.get(key, 0) + 1
+            providers_by_model.setdefault(key, set()).add(session.provider)
+
+        models: list[ModelSummary] = [
+            ModelSummary(
+                id=labels[key],
+                label=labels[key],
+                count=counts[key],
+                providers=sorted(
+                    providers_by_model.get(key, set()),
+                    key=str.casefold,
+                ),
+            )
+            for key in labels
+        ]
+        models.sort(key=lambda item: (-item["count"], item["label"].casefold()))
+        send_json(handler, {"models": models})
+
     def working_dirs(self, handler: BaseHTTPRequestHandler) -> None:
         sessions = self.service.all_sessions()
         counts: dict[str, int] = {}
@@ -340,10 +384,20 @@ class SessionApi:
         include_dirs = {value for value in params.get("include_working_dir", []) if value}
         exclude_dirs = {value for value in params.get("exclude_working_dir", []) if value}
         search_term = params.get("search", [""])[0].strip()
+        model_exact = {value for value in params.get("model", []) if value}
+        model_prefixes = {value for value in params.get("model_prefix", []) if value}
+        model_provider = params.get("model_provider", [""])[0].strip() or None
+        model_match = params.get("model_match", [""])[0].strip().lower()
+        if model_match == "prefix" and model_exact and not model_prefixes:
+            model_prefixes = set(model_exact)
+            model_exact = set()
 
         return SessionQuery(
             providers=provider_filters,
             search=search_term,
+            model_exact=model_exact,
+            model_prefixes=model_prefixes,
+            model_provider=model_provider,
             order=order,
             page=page,
             page_size=page_size,
