@@ -130,3 +130,43 @@ def test_models_endpoint_aggregates_and_sorts() -> None:
     assert [item["id"] for item in payload["models"]] == ["gpt-5-codex", "claude-sonnet"]
     assert payload["models"][0]["count"] == 2
     assert payload["models"][0]["providers"] == ["openai-codex"]
+
+
+def test_search_hits_endpoint_returns_snippets() -> None:
+    ts_new = datetime(2025, 10, 7, 16, tzinfo=timezone.utc)
+    ts_old = datetime(2025, 10, 7, 14, tzinfo=timezone.utc)
+    records = [
+        SessionRecord(
+            provider="openai-codex",
+            session_id="s1",
+            source_path=Path("/tmp/s1.jsonl"),
+            started_at=ts_new,
+            updated_at=ts_new,
+            working_dir="/work",
+            model="gpt-5-codex",
+            messages=[Message(role="assistant", content="Hello world", created_at=ts_new)],
+        ),
+        SessionRecord(
+            provider="openai-codex",
+            session_id="s2",
+            source_path=Path("/tmp/s2.jsonl"),
+            started_at=ts_old,
+            updated_at=ts_old,
+            working_dir="/work",
+            model="gpt-5-codex",
+            messages=[Message(role="assistant", content="No match here", created_at=ts_old)],
+        ),
+    ]
+    service = SessionService(providers=[StubProvider(records)], refresh_interval=None)
+    api = SessionApi(service)
+    handler = DummyHandler()
+
+    assert api.dispatch(cast(BaseHTTPRequestHandler, handler), "/api/search-hits", "search=hello")
+    payload = json.loads(handler.wfile.getvalue().decode("utf-8"))
+
+    assert payload["hits"]
+    hit = payload["hits"][0]
+    assert hit["session_id"] == "s1"
+    assert hit["match_start"] == 0
+    assert hit["match_length"] == 5
+    assert "hello" in hit["snippet"].lower()

@@ -149,12 +149,29 @@
         </div>
 
         <div class="search-row">
-          <input
-            type="search"
-            id="session-search"
-            placeholder="Search sessions (exact match)"
-            aria-label="Search sessions"
-          />
+          <div class="search-panel-wrapper">
+            <input
+              type="search"
+              id="session-search"
+              placeholder="Search sessions (exact match)"
+              aria-label="Search sessions"
+              aria-controls="search-panel"
+              aria-expanded="false"
+              autocomplete="off"
+            />
+            <div id="search-panel" class="search-panel" aria-hidden="true">
+              <div class="search-panel-meta" id="search-panel-meta"></div>
+              <div
+                id="search-panel-list"
+                class="search-panel-list"
+                role="listbox"
+                aria-label="Search results"
+              ></div>
+              <div id="search-panel-empty" class="search-panel-empty" hidden>
+                No matches
+              </div>
+            </div>
+          </div>
         </div>
         <div class="filters-footer">
           <div class="results-count" id="results-count" aria-live="polite">0 results</div>

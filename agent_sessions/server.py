@@ -17,7 +17,7 @@ from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 from .data_store import SessionService
 from .model import SessionRecord
 from .providers import get_provider_entry, list_providers
-from .query import ORDER_UPDATED_AT, SUPPORTED_ORDERS, SessionQuery
+from .query import ORDER_UPDATED_AT, SUPPORTED_ORDERS, SessionQuery, apply_filters, sort_sessions
 from .util import strip_private_use
 
 STATIC_DIR = Path(__file__).with_name("static")
@@ -60,6 +60,44 @@ def message_preview(session: SessionRecord) -> str:
         return ""
     preview = strip_private_use(last.content or "").replace("\n", " ").strip()
     return preview[:200]
+
+
+def _ordered_messages(session: SessionRecord) -> list:
+    def sort_key(message) -> float:
+        return message.created_at.timestamp() if message.created_at else float("-inf")
+
+    descending = sorted(session.messages, key=sort_key, reverse=True)
+    ascending = sorted(descending, key=sort_key)
+    return list(reversed(ascending))
+
+
+def _to_one_line(text: str) -> str:
+    normalized = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return " ".join(normalized.split())
+
+
+def _build_snippet(text: str, match_start: int, match_length: int) -> tuple[str, int, int]:
+    if not text:
+        return "", 0, 0
+
+    max_len = 220
+    total = len(text)
+    if total <= max_len:
+        return text, match_start, match_length
+
+    context = max(36, (max_len - match_length) // 2)
+    start = max(0, match_start - context)
+    end = min(total, match_start + match_length + context)
+    snippet = text[start:end]
+    offset = match_start - start
+
+    if start > 0:
+        snippet = "…" + snippet
+        offset += 1
+    if end < total:
+        snippet = snippet + "…"
+
+    return snippet, offset, match_length
 
 
 def session_summary(session: SessionRecord) -> dict[str, object]:
@@ -208,6 +246,9 @@ class SessionApi:
         if path == "/api/sessions":
             self.list_sessions(handler, params)
             return True
+        if path == "/api/search-hits":
+            self.search_hits(handler, params)
+            return True
         if path.startswith("/api/sessions/"):
             self.session_detail(handler, path, params)
             return True
@@ -257,6 +298,84 @@ class SessionApi:
             "sessions": [session_summary(item) for item in page_result.items],
         }
         send_json(handler, payload)
+
+    def search_hits(self, handler: BaseHTTPRequestHandler, params: dict[str, list[str]]) -> None:
+        raw_term = params.get("search", [""])[0]
+        search_term = strip_private_use(raw_term).strip()
+        if not search_term:
+            send_json(handler, {"query": "", "hits": [], "has_more": False})
+            return
+
+        limit = self._coerce_positive_int(params.get("limit", ["8"])[0], default=8)
+        if limit is None:
+            send_json(handler, {"error": "Invalid limit parameter"}, HTTPStatus.BAD_REQUEST)
+            return
+        limit = min(limit, 50)
+
+        order = params.get("order", [ORDER_UPDATED_AT])[0]
+        if order not in SUPPORTED_ORDERS:
+            send_json(
+                handler,
+                {
+                    "error": "Unsupported order parameter",
+                    "allowed": sorted(SUPPORTED_ORDERS),
+                },
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        session_query = self._build_session_query(params, order, 1, 1)
+        normalized = session_query.normalized()
+        normalized.search = strip_private_use(normalized.search).strip()
+        lowered_term = normalized.search.lower()
+        if not lowered_term:
+            send_json(handler, {"query": "", "hits": [], "has_more": False})
+            return
+
+        sessions = self.service.all_sessions()
+        filtered = apply_filters(sessions, normalized)
+        ordered = sort_sessions(filtered, normalized.order)
+
+        hits: list[dict[str, object]] = []
+        has_more = False
+
+        for session in ordered:
+            if len(hits) >= limit:
+                has_more = True
+                break
+
+            messages = _ordered_messages(session)
+            for index, message in enumerate(messages):
+                content = strip_private_use(message.content or "")
+                if not content:
+                    continue
+                lowered = content.lower()
+                match_start = lowered.find(lowered_term)
+                if match_start == -1:
+                    continue
+
+                one_line = _to_one_line(content)
+                snippet, snippet_start, snippet_length = _build_snippet(
+                    one_line, match_start, len(lowered_term)
+                )
+                hits.append(
+                    {
+                        "provider": session.provider,
+                        "session_id": session.session_id,
+                        "source_path": str(session.source_path),
+                        "message_index": index,
+                        "match_start": match_start,
+                        "match_length": len(lowered_term),
+                        "snippet": snippet,
+                        "snippet_match_start": snippet_start,
+                        "snippet_match_length": snippet_length,
+                    }
+                )
+                if len(hits) >= limit:
+                    has_more = True
+                    break
+
+        send_json(handler, {"query": normalized.search, "hits": hits, "has_more": has_more})
 
     def session_detail(
         self, handler: BaseHTTPRequestHandler, path: str, params: dict[str, list[str]]
