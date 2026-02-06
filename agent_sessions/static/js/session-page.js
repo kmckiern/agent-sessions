@@ -13,6 +13,9 @@ function initSessionPage() {
   const provider = params.get("provider");
   const sessionId = params.get("session") || params.get("session_id");
   const sourcePath = params.get("source_path") || params.get("path");
+  const matchIndex = Number.parseInt(params.get("match_index") || "", 10);
+  const matchStart = Number.parseInt(params.get("match_start") || "", 10);
+  const matchLength = Number.parseInt(params.get("match_length") || "", 10);
 
   const titleEl = document.getElementById("session-title");
   const copyButton = document.getElementById("session-copy");
@@ -196,24 +199,71 @@ function initSessionPage() {
 
       const tableMessages = [...ascendingMessages].reverse();
 
+      const hasMatchTarget =
+        Number.isFinite(matchIndex) &&
+        matchIndex >= 0 &&
+        Number.isFinite(matchStart) &&
+        Number.isFinite(matchLength) &&
+        matchLength > 0;
+
+      const highlightContent = (content, start, length) => {
+        if (!content) {
+          return "";
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(length)) {
+          return escapeHtml(content);
+        }
+        if (start < 0 || length <= 0 || start >= content.length) {
+          return escapeHtml(content);
+        }
+        const safeEnd = Math.min(content.length, start + length);
+        const before = content.slice(0, start);
+        const match = content.slice(start, safeEnd);
+        const after = content.slice(safeEnd);
+        return `${escapeHtml(before)}<mark class="search-match">${escapeHtml(
+          match
+        )}</mark>${escapeHtml(after)}`;
+      };
+
       const rows = tableMessages
-        .map((message) => {
+        .map((message, index) => {
           const timestamp = formatDate(message.created_at);
           const role = message.role || "—";
           const content = message.content || "";
+          const isTarget = hasMatchTarget && index === matchIndex;
+          const contentHtml = isTarget
+            ? highlightContent(content, matchStart, matchLength)
+            : escapeHtml(content);
+          const rowClass = isTarget ? ' class="search-target"' : "";
+          const detailClass = isTarget
+            ? "message-detail search-target-content"
+            : "message-detail";
           return `
-            <tr>
+            <tr data-message-index="${index}"${rowClass}>
               <td class="cell cell-wrap">${escapeHtml(timestamp)}</td>
               <td class="cell cell-truncate">${escapeHtml(role)}</td>
-              <td class="cell cell-wrap cell-content"><div class="message-detail">${escapeHtml(
-                content
-              )}</div></td>
+              <td class="cell cell-wrap cell-content"><div class="${detailClass}">${contentHtml}</div></td>
             </tr>
           `;
         })
         .join("");
 
       tableBody.innerHTML = rows;
+      if (hasMatchTarget) {
+        requestAnimationFrame(() => {
+          const targetRow = tableBody.querySelector(
+            `tr[data-message-index="${matchIndex}"]`
+          );
+          if (!targetRow) {
+            return;
+          }
+          targetRow.scrollIntoView({ block: "center" });
+          const mark = targetRow.querySelector("mark.search-match");
+          if (mark) {
+            mark.scrollIntoView({ block: "center", inline: "nearest" });
+          }
+        });
+      }
       const exportRows = ascendingMessages.map((message) => ({
         timestamp: normalizeValue(formatDate(message.created_at)),
         role: normalizeValue(message.role || "—"),

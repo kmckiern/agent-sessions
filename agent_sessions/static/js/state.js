@@ -136,6 +136,16 @@ export function buildSessionQuery(state) {
   return params;
 }
 
+export function buildSearchHitsQuery(state, limit = 8) {
+  const params = buildSessionQuery(state);
+  params.delete("page");
+  params.delete("page_size");
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  return params;
+}
+
 export function syncUrlFromState(state) {
   const params = buildSessionQuery(state);
   const query = params.toString();

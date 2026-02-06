@@ -105,7 +105,11 @@ export function initFilterControls(dom, state, callbacks) {
   dom.searchInput.addEventListener("input", () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
-      callbacks.onSearchChange(dom.searchInput.value.trim());
+      const nextValue = dom.searchInput.value.trim();
+      callbacks.onSearchChange(nextValue);
+      if (callbacks.onSearchPreview) {
+        callbacks.onSearchPreview(nextValue);
+      }
     }, 180);
   });
 
