@@ -7,22 +7,28 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
-from dataclasses import dataclass
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TypedDict
 from urllib.parse import ParseResult, parse_qs, unquote, urlparse
 
+from .cache import path_fingerprint
 from .data_store import SessionService
 from .model import SessionRecord
 from .providers import get_provider_entry, list_providers
 from .query import ORDER_UPDATED_AT, SUPPORTED_ORDERS, SessionQuery, apply_filters, sort_sessions
+from .telemetry import log_event
 from .util import strip_private_use
 
 STATIC_DIR = Path(__file__).with_name("static")
 MAX_PAGE_SIZE = 100
 DEFAULT_REFRESH_INTERVAL = float(os.environ.get("AGENT_SESSIONS_REFRESH_INTERVAL", "30"))
+DETAIL_CACHE_MAX = 256
 
 
 class ProviderSummary(TypedDict):
@@ -198,11 +204,19 @@ def send_json(
     status: HTTPStatus = HTTPStatus.OK,
 ) -> None:
     data = json.dumps(payload).encode("utf-8")
+    send_json_bytes(handler, data, status=status)
+
+
+def send_json_bytes(
+    handler: BaseHTTPRequestHandler,
+    payload: bytes,
+    status: HTTPStatus = HTTPStatus.OK,
+) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Content-Length", str(len(payload)))
     handler.end_headers()
-    _safe_write(handler, data)
+    _safe_write(handler, payload)
 
 
 def serve_static_file(handler: BaseHTTPRequestHandler, static_root: Path, relative: str) -> bool:
@@ -235,33 +249,54 @@ def serve_static_file(handler: BaseHTTPRequestHandler, static_root: Path, relati
     return True
 
 
+@dataclass
+class _InFlightDetailPayload:
+    event: threading.Event = field(default_factory=threading.Event)
+    payload: dict[str, object] | None = None
+
+
 class SessionApi:
     """Request handlers for API endpoints."""
 
     def __init__(self, service: SessionService) -> None:
         self.service = service
+        self._detail_cache_lock = threading.Lock()
+        self._detail_cache: OrderedDict[str, dict[str, object]] = OrderedDict()
+        self._detail_inflight: dict[str, _InFlightDetailPayload] = {}
 
     def dispatch(self, handler: BaseHTTPRequestHandler, path: str, query: str) -> bool:
-        params = parse_qs(query, keep_blank_values=False)
-        if path == "/api/sessions":
-            self.list_sessions(handler, params)
-            return True
-        if path == "/api/search-hits":
-            self.search_hits(handler, params)
-            return True
-        if path.startswith("/api/sessions/"):
-            self.session_detail(handler, path, params)
-            return True
-        if path == "/api/providers":
-            self.providers(handler)
-            return True
-        if path == "/api/models":
-            self.models(handler, params)
-            return True
-        if path == "/api/working-dirs":
-            self.working_dirs(handler)
-            return True
-        return False
+        started = time.perf_counter()
+        endpoint = self._endpoint_name(path)
+        handled = False
+
+        try:
+            params = parse_qs(query, keep_blank_values=False)
+            if path == "/api/sessions":
+                self.list_sessions(handler, params)
+                handled = True
+            elif path == "/api/search-hits":
+                self.search_hits(handler, params)
+                handled = True
+            elif path.startswith("/api/sessions/"):
+                self.session_detail(handler, path, params)
+                handled = True
+            elif path == "/api/providers":
+                self.providers(handler)
+                handled = True
+            elif path == "/api/models":
+                self.models(handler, params)
+                handled = True
+            elif path == "/api/working-dirs":
+                self.working_dirs(handler)
+                handled = True
+            return handled
+        finally:
+            log_event(
+                "http.endpoint",
+                endpoint=endpoint,
+                response_ms=(time.perf_counter() - started) * 1000,
+                handled=handled,
+            )
 
     def list_sessions(self, handler: BaseHTTPRequestHandler, params: dict[str, list[str]]) -> None:
         page = self._coerce_positive_int(params.get("page", ["1"])[0], default=1)
@@ -389,12 +424,34 @@ class SessionApi:
         session_id = unquote("/".join(segments[3:])) if len(segments) > 3 else ""
         source_path = params.get("source_path", [None])[0]
 
-        session = self.service.get_session(provider, session_id or None, source_path)
+        lookup_started = time.perf_counter()
+        result = self.service.get_session_with_metrics(provider, session_id or None, source_path)
+        lookup_ms = (time.perf_counter() - lookup_started) * 1000
+        session = result.session
         if session is None:
             send_json(handler, {"error": "Session not found"}, HTTPStatus.NOT_FOUND)
             return
 
-        send_json(handler, session_detail(session))
+        payload_started = time.perf_counter()
+        payload, detail_cache_status = self._detail_payload_for_session(session)
+        payload_build_ms = (time.perf_counter() - payload_started) * 1000
+        encoded = json.dumps(payload).encode("utf-8")
+        log_event(
+            "session.detail_load",
+            provider=session.provider,
+            session_id=session.session_id,
+            source_path=str(session.source_path),
+            lookup_source=result.source,
+            lookup_cache_status=result.cache_status,
+            endpoint_lookup_ms=lookup_ms,
+            parse_normalize_ms=result.parse_ms,
+            payload_build_ms=payload_build_ms,
+            payload_cache_status=detail_cache_status,
+            payload_bytes=len(encoded),
+            message_count=session.message_count,
+            normalized_count=len(session.normalized_messages or []),
+        )
+        send_json_bytes(handler, encoded)
 
     def providers(self, handler: BaseHTTPRequestHandler) -> None:
         sessions = self.service.all_sessions()
@@ -522,6 +579,63 @@ class SessionApi:
             page_size=page_size,
             include_working_dirs=include_dirs,
             exclude_working_dirs=exclude_dirs,
+        )
+
+    @staticmethod
+    def _endpoint_name(path: str) -> str:
+        if path.startswith("/api/sessions/"):
+            return "/api/sessions/:provider/:session"
+        return path
+
+    def _detail_payload_for_session(self, session: SessionRecord) -> tuple[dict[str, object], str]:
+        key = self._detail_cache_key(session)
+        owner = False
+
+        with self._detail_cache_lock:
+            cached = self._detail_cache.get(key)
+            if cached is not None:
+                self._detail_cache.move_to_end(key)
+                return cached, "hit"
+
+            inflight = self._detail_inflight.get(key)
+            if inflight is None:
+                inflight = _InFlightDetailPayload()
+                self._detail_inflight[key] = inflight
+                owner = True
+
+        if not owner:
+            inflight.event.wait()
+            if inflight.payload is not None:
+                return inflight.payload, "coalesced"
+            payload = session_detail(session)
+            return payload, "miss"
+
+        try:
+            payload = session_detail(session)
+            inflight.payload = payload
+            with self._detail_cache_lock:
+                self._detail_cache[key] = payload
+                self._detail_cache.move_to_end(key)
+                while len(self._detail_cache) > DETAIL_CACHE_MAX:
+                    self._detail_cache.popitem(last=False)
+            return payload, "miss"
+        finally:
+            inflight.event.set()
+            with self._detail_cache_lock:
+                self._detail_inflight.pop(key, None)
+
+    @staticmethod
+    def _detail_cache_key(session: SessionRecord) -> str:
+        fingerprint = path_fingerprint(session.source_path)
+        if fingerprint:
+            mtime_ns, size = fingerprint
+            return (
+                f"{session.provider}::{session.session_id}::{session.source_path}::"
+                f"{mtime_ns}:{size}"
+            )
+        return (
+            f"{session.provider}::{session.session_id}::{session.source_path}::"
+            f"{isoformat_or_none(session.updated_at) or ''}:{session.message_count}"
         )
 
 

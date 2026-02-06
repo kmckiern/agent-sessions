@@ -79,6 +79,8 @@ Session archives may contain sensitive data. Before sharing screenshots or logs,
 - **Empty results**: Verify the default paths above or set `CODEX_HOME`, `CLAUDE_HOME`, or `GEMINI_HOME` to the directory that contains your session data.
 - **Permissions errors**: Ensure the running user can read the session directories. On macOS, check Full Disk Access if the folders are restricted.
 - **Cache behavior**: Delete the cache directory or set `AGENT_SESSIONS_DISABLE_DISK_CACHE=1` if results look stale.
+- **Inspect cache telemetry**: Run with `AGENT_SESSIONS_DEBUG=1` and look for `startup.metadata_cache` / `startup.cache_decision` events on stderr (they include cache paths, hit/miss status, and any fallback/write failures).
+- **Override cache location**: Set `AGENT_SESSIONS_CACHE_DIR` to a writable directory. If the configured cache dir is unavailable, Agent Sessions will fall back to the OS cache dir, then to a workspace-local `.agent-sessions-cache/`.
 
 ## Support / Questions
 
