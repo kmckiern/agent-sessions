@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -385,6 +386,47 @@ def test_touching_source_invalidates_cached_snapshot(tmp_path: Path) -> None:
 
     assert provider_b.calls == 1
     assert sessions[0].model == "new-model"
+
+
+def test_corrupted_metadata_snapshot_triggers_rebuild_and_recovers(tmp_path: Path) -> None:
+    source = tmp_path / "session.jsonl"
+    source.write_text('{"event":"x"}\n', encoding="utf-8")
+    record = make_record("s1", 0)
+    record.source_path = source
+
+    provider_a = ManifestProvider(
+        [record],
+        base_dir=tmp_path,
+        cache_paths=[source],
+    )
+    first_service = SessionService(providers=[provider_a], refresh_interval=None)
+    assert first_service.all_sessions()
+    assert provider_a.calls == 1
+
+    cache_dir = Path(os.environ["AGENT_SESSIONS_CACHE_DIR"])
+    snapshot_path = cache_dir / "metadata_snapshot.json"
+    assert snapshot_path.exists()
+    snapshot_path.write_text("{not-json", encoding="utf-8")
+
+    provider_b = ManifestProvider(
+        [record],
+        base_dir=tmp_path,
+        cache_paths=[source],
+    )
+    second_service = SessionService(providers=[provider_b], refresh_interval=None)
+    sessions = second_service.all_sessions()
+    assert [item.session_id for item in sessions] == ["s1"]
+    assert provider_b.calls == 1
+
+    provider_c = ManifestProvider(
+        [record],
+        base_dir=tmp_path,
+        cache_paths=[source],
+    )
+    third_service = SessionService(providers=[provider_c], refresh_interval=None)
+    sessions = third_service.all_sessions()
+    assert [item.session_id for item in sessions] == ["s1"]
+    assert provider_c.calls == 0
 
 
 def test_concurrent_direct_opens_are_coalesced() -> None:

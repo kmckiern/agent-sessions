@@ -587,9 +587,7 @@ class SessionApi:
             return "/api/sessions/:provider/:session"
         return path
 
-    def _detail_payload_for_session(
-        self, session: SessionRecord
-    ) -> tuple[dict[str, object], str]:
+    def _detail_payload_for_session(self, session: SessionRecord) -> tuple[dict[str, object], str]:
         key = self._detail_cache_key(session)
         owner = False
 

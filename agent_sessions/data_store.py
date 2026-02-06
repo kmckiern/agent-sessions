@@ -15,6 +15,7 @@ from .cache import (
     METADATA_SCHEMA_VERSION,
     DiskMetadataCache,
     DiskSessionCache,
+    MetadataCacheAttempt,
     path_fingerprint,
 )
 from .indexer import build_providers, load_sessions
@@ -202,10 +203,7 @@ class SessionService:
                         background_reason = "startup_refresh_interval"
                     else:
                         blocking_reason = "startup_refresh_interval"
-                elif (
-                    self._serve_stale_while_revalidate
-                    and not self._startup_validation_scheduled
-                ):
+                elif self._serve_stale_while_revalidate and not self._startup_validation_scheduled:
                     background_reason = "startup_validate"
                     self._startup_validation_scheduled = True
             elif self._cache_state.should_reload(True, now=self._clock):
@@ -229,15 +227,22 @@ class SessionService:
         self._cache_key = cache_key
 
         started = time.perf_counter()
-        snapshot = self._metadata_cache.load(cache_key)
+        load_result = self._metadata_cache.load(cache_key)
         load_ms = (time.perf_counter() - started) * 1000
 
+        snapshot = load_result.snapshot
+        log_event(
+            "startup.metadata_cache",
+            status=load_result.status,
+            cache_read_ms=load_ms,
+            primary_cache_path=str(self._metadata_cache.cache_path),
+            chosen_cache_path=str(load_result.cache_path) if load_result.cache_path else None,
+            attempts=len(load_result.attempts),
+            failures=_metadata_cache_failures(load_result.attempts),
+            sessions=len(snapshot.sessions) if snapshot else 0,
+        )
+
         if snapshot is None:
-            log_event(
-                "startup.metadata_cache",
-                status="miss",
-                cache_read_ms=load_ms,
-            )
             return
 
         self._apply_snapshot_locked(
@@ -245,12 +250,6 @@ class SessionService:
             manifest=snapshot.manifest,
             manifest_hash=snapshot.manifest_hash,
             cache_key=cache_key,
-        )
-        log_event(
-            "startup.metadata_cache",
-            status="hit",
-            cache_read_ms=load_ms,
-            sessions=len(snapshot.sessions),
         )
 
     def _refresh_async(self, reason: str) -> None:
@@ -331,7 +330,7 @@ class SessionService:
             )
 
         write_started = time.perf_counter()
-        self._metadata_cache.persist(cache_key, manifest_hash, manifest, sessions)
+        persist_result = self._metadata_cache.persist(cache_key, manifest_hash, manifest, sessions)
         cache_write_ms = (time.perf_counter() - write_started) * 1000
 
         status = "miss" if not has_sessions else "stale"
@@ -342,6 +341,12 @@ class SessionService:
             rebuild_ms=rebuild_ms,
             manifest_ms=manifest_ms,
             cache_write_ms=cache_write_ms,
+            metadata_cache_status=persist_result.status,
+            metadata_cache_path=(
+                str(persist_result.cache_path) if persist_result.cache_path else None
+            ),
+            metadata_cache_attempts=len(persist_result.attempts),
+            metadata_cache_failures=_metadata_cache_failures(persist_result.attempts),
             sessions=len(sessions),
         )
 
@@ -615,3 +620,24 @@ def _canonical_path(path: Path) -> Path | None:
         return path.expanduser().resolve(strict=False)
     except OSError:
         return None
+
+
+MetadataCacheFailure = dict[str, str | None]
+
+
+def _metadata_cache_failures(
+    attempts: Sequence[MetadataCacheAttempt],
+) -> list[MetadataCacheFailure]:
+    failures: list[MetadataCacheFailure] = []
+    for attempt in attempts:
+        if attempt.outcome not in {"error", "invalid"}:
+            continue
+        failures.append(
+            {
+                "path": str(attempt.cache_path),
+                "outcome": attempt.outcome,
+                "error_type": attempt.error_type,
+                "error": attempt.error_message,
+            }
+        )
+    return failures

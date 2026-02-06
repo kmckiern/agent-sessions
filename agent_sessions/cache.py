@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .model import (
     Message,
@@ -24,9 +24,44 @@ from .util import parse_timestamp
 SESSION_CACHE_VERSION = 1
 METADATA_CACHE_VERSION = 1
 METADATA_SCHEMA_VERSION = 1
+WORKSPACE_CACHE_DIRNAME = ".agent-sessions-cache"
 
 # Backward-compatible alias used by older tests/imports.
 CACHE_VERSION = SESSION_CACHE_VERSION
+
+MetadataCacheStatus = Literal[
+    "hit",
+    "miss",
+    "write_fail",
+    "fallback_hit",
+    "fallback_fail",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataCacheAttempt:
+    cache_dir: Path
+    cache_path: Path
+    outcome: Literal["hit", "miss", "invalid", "error"]
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataCacheLoadResult:
+    status: MetadataCacheStatus
+    snapshot: CachedMetadataSnapshot | None
+    cache_dir: Path | None
+    cache_path: Path | None
+    attempts: tuple[MetadataCacheAttempt, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MetadataCachePersistResult:
+    status: MetadataCacheStatus
+    cache_dir: Path | None
+    cache_path: Path | None
+    attempts: tuple[MetadataCacheAttempt, ...] = ()
 
 
 def default_cache_dir() -> Path:
@@ -52,6 +87,28 @@ def cache_dir_from_env() -> Path:
     if value:
         return Path(value).expanduser()
     return default_cache_dir()
+
+
+def metadata_cache_dir_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_value = os.getenv("AGENT_SESSIONS_CACHE_DIR", "").strip()
+    if env_value:
+        candidates.append(Path(env_value).expanduser())
+    candidates.append(default_cache_dir())
+    candidates.append(Path.cwd() / WORKSPACE_CACHE_DIRNAME)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        try:
+            normalized = os.path.normcase(os.fspath(path.expanduser()))
+        except OSError:
+            normalized = os.path.normcase(os.fspath(path))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(path)
+    return unique
 
 
 def path_fingerprint(path: Path) -> tuple[int, int] | None:
@@ -154,66 +211,109 @@ class DiskSessionCache:
 
 
 class DiskMetadataCache:
-    def __init__(self, cache_dir: Path, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        cache_dir: Path,
+        *,
+        enabled: bool = True,
+        cache_dirs: list[Path] | None = None,
+    ) -> None:
         self.enabled = enabled
         self.cache_dir = cache_dir
         self.cache_path = cache_dir / "metadata_snapshot.json"
+        self._cache_dirs = list(cache_dirs) if cache_dirs is not None else [cache_dir]
 
     @classmethod
     def from_env(cls) -> DiskMetadataCache:
         if cache_disabled():
             return cls(Path("."), enabled=False)
-        return cls(cache_dir_from_env(), enabled=True)
+        cache_dirs = metadata_cache_dir_candidates()
+        primary_dir = cache_dirs[0]
+        return cls(primary_dir, enabled=True, cache_dirs=cache_dirs)
 
-    def load(self, cache_key: str) -> CachedMetadataSnapshot | None:
+    def load(self, cache_key: str) -> MetadataCacheLoadResult:
         if not self.enabled:
-            return None
+            return MetadataCacheLoadResult(
+                status="miss",
+                snapshot=None,
+                cache_dir=None,
+                cache_path=None,
+            )
 
-        payload = _load_json_payload(self.cache_path)
-        if not isinstance(payload, dict):
-            return None
-        if payload.get("version") != METADATA_CACHE_VERSION:
-            return None
-        if payload.get("schema_version") != METADATA_SCHEMA_VERSION:
-            return None
-        if payload.get("cache_key") != cache_key:
-            return None
+        attempts: list[MetadataCacheAttempt] = []
+        saw_failure = False
 
-        raw_manifest = payload.get("manifest")
-        if not isinstance(raw_manifest, list):
-            return None
-        manifest: dict[tuple[str, str], tuple[int, int]] = {}
-        for entry in raw_manifest:
-            if not isinstance(entry, dict):
+        for idx, cache_dir in enumerate(self._cache_dirs):
+            cache_path = cache_dir / "metadata_snapshot.json"
+            payload, error = _load_json_payload_with_error(cache_path)
+            if error is not None:
+                if isinstance(error, FileNotFoundError):
+                    attempts.append(
+                        MetadataCacheAttempt(
+                            cache_dir=cache_dir,
+                            cache_path=cache_path,
+                            outcome="miss",
+                        )
+                    )
+                    continue
+                saw_failure = True
+                attempts.append(
+                    MetadataCacheAttempt(
+                        cache_dir=cache_dir,
+                        cache_path=cache_path,
+                        outcome="error",
+                        error_type=type(error).__name__,
+                        error_message=str(error),
+                    )
+                )
                 continue
-            provider = entry.get("provider")
-            source_path = entry.get("source_path")
-            mtime_ns = entry.get("mtime_ns")
-            size = entry.get("size")
-            if (
-                isinstance(provider, str)
-                and isinstance(source_path, str)
-                and isinstance(mtime_ns, int)
-                and isinstance(size, int)
-            ):
-                manifest[(provider, source_path)] = (mtime_ns, size)
 
-        raw_sessions = payload.get("sessions")
-        if not isinstance(raw_sessions, list):
-            return None
-        sessions = [
-            deserialize_session_record(entry)
-            for entry in raw_sessions
-            if isinstance(entry, dict)
-        ]
-        manifest_hash = payload.get("manifest_hash")
-        if not isinstance(manifest_hash, str):
-            manifest_hash = ""
-        return CachedMetadataSnapshot(
-            cache_key=cache_key,
-            manifest_hash=manifest_hash,
-            manifest=manifest,
-            sessions=sessions,
+            snapshot, outcome, reason = _parse_metadata_snapshot(payload, cache_key)
+            if snapshot is None:
+                if outcome == "miss":
+                    attempts.append(
+                        MetadataCacheAttempt(
+                            cache_dir=cache_dir,
+                            cache_path=cache_path,
+                            outcome="miss",
+                            error_message=reason,
+                        )
+                    )
+                    continue
+                saw_failure = True
+                attempts.append(
+                    MetadataCacheAttempt(
+                        cache_dir=cache_dir,
+                        cache_path=cache_path,
+                        outcome="invalid",
+                        error_message=reason,
+                    )
+                )
+                continue
+
+            attempts.append(
+                MetadataCacheAttempt(
+                    cache_dir=cache_dir,
+                    cache_path=cache_path,
+                    outcome="hit",
+                )
+            )
+            self.cache_dir = cache_dir
+            self.cache_path = cache_path
+            return MetadataCacheLoadResult(
+                status="hit" if idx == 0 else "fallback_hit",
+                snapshot=snapshot,
+                cache_dir=cache_dir,
+                cache_path=cache_path,
+                attempts=tuple(attempts),
+            )
+
+        return MetadataCacheLoadResult(
+            status="fallback_fail" if saw_failure else "miss",
+            snapshot=None,
+            cache_dir=None,
+            cache_path=None,
+            attempts=tuple(attempts),
         )
 
     def persist(
@@ -222,9 +322,13 @@ class DiskMetadataCache:
         manifest_hash: str,
         manifest: dict[tuple[str, str], tuple[int, int]],
         sessions: list[SessionRecord],
-    ) -> None:
+    ) -> MetadataCachePersistResult:
         if not self.enabled:
-            return
+            return MetadataCachePersistResult(
+                status="miss",
+                cache_dir=None,
+                cache_path=None,
+            )
 
         payload = {
             "version": METADATA_CACHE_VERSION,
@@ -243,9 +347,48 @@ class DiskMetadataCache:
             ],
             "sessions": [serialize_session_record(item) for item in sessions],
         }
-        if not _atomic_write_json(self.cache_dir, self.cache_path, payload):
-            # Metadata cache is best-effort.
-            self.enabled = False
+
+        attempts: list[MetadataCacheAttempt] = []
+        for idx, cache_dir in enumerate(self._cache_dirs):
+            cache_path = cache_dir / "metadata_snapshot.json"
+            ok, error = _atomic_write_json_with_error(cache_dir, cache_path, payload)
+            if not ok:
+                attempts.append(
+                    MetadataCacheAttempt(
+                        cache_dir=cache_dir,
+                        cache_path=cache_path,
+                        outcome="error",
+                        error_type=type(error).__name__ if error else None,
+                        error_message=str(error) if error else None,
+                    )
+                )
+                continue
+
+            attempts.append(
+                MetadataCacheAttempt(
+                    cache_dir=cache_dir,
+                    cache_path=cache_path,
+                    outcome="hit",
+                )
+            )
+            self.cache_dir = cache_dir
+            self.cache_path = cache_path
+            return MetadataCachePersistResult(
+                status="hit" if idx == 0 else "fallback_hit",
+                cache_dir=cache_dir,
+                cache_path=cache_path,
+                attempts=tuple(attempts),
+            )
+
+        # Metadata cache is best-effort but we avoid repeatedly attempting writes
+        # when all candidate cache paths are unavailable.
+        self.enabled = False
+        return MetadataCachePersistResult(
+            status="write_fail",
+            cache_dir=None,
+            cache_path=None,
+            attempts=tuple(attempts),
+        )
 
 
 def serialize_session_record(record: SessionRecord) -> dict[str, Any]:
@@ -401,6 +544,78 @@ def _load_json_payload(path: Path) -> Any:
         return None
 
 
+def _load_json_payload_with_error(path: Path) -> tuple[Any, Exception | None]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, exc
+    try:
+        return json.loads(raw), None
+    except json.JSONDecodeError as exc:
+        return None, exc
+
+
+def _parse_metadata_snapshot(
+    payload: Any,
+    cache_key: str,
+) -> tuple[CachedMetadataSnapshot | None, Literal["hit", "miss", "invalid"], str | None]:
+    if not isinstance(payload, dict):
+        return None, "invalid", "payload_not_dict"
+
+    version = payload.get("version")
+    if version != METADATA_CACHE_VERSION:
+        return None, "miss", "version_mismatch"
+
+    schema_version = payload.get("schema_version")
+    if schema_version != METADATA_SCHEMA_VERSION:
+        return None, "miss", "schema_version_mismatch"
+
+    stored_cache_key = payload.get("cache_key")
+    if stored_cache_key != cache_key:
+        return None, "miss", "cache_key_mismatch"
+
+    raw_manifest = payload.get("manifest")
+    if not isinstance(raw_manifest, list):
+        return None, "invalid", "manifest_invalid"
+    manifest: dict[tuple[str, str], tuple[int, int]] = {}
+    for entry in raw_manifest:
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("provider")
+        source_path = entry.get("source_path")
+        mtime_ns = entry.get("mtime_ns")
+        size = entry.get("size")
+        if (
+            isinstance(provider, str)
+            and isinstance(source_path, str)
+            and isinstance(mtime_ns, int)
+            and isinstance(size, int)
+        ):
+            manifest[(provider, source_path)] = (mtime_ns, size)
+
+    raw_sessions = payload.get("sessions")
+    if not isinstance(raw_sessions, list):
+        return None, "invalid", "sessions_invalid"
+    sessions = [
+        deserialize_session_record(entry) for entry in raw_sessions if isinstance(entry, dict)
+    ]
+
+    manifest_hash = payload.get("manifest_hash")
+    if not isinstance(manifest_hash, str):
+        manifest_hash = ""
+
+    return (
+        CachedMetadataSnapshot(
+            cache_key=cache_key,
+            manifest_hash=manifest_hash,
+            manifest=manifest,
+            sessions=sessions,
+        ),
+        "hit",
+        None,
+    )
+
+
 def _atomic_write_json(cache_dir: Path, cache_path: Path, payload: dict[str, Any]) -> bool:
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -410,3 +625,18 @@ def _atomic_write_json(cache_dir: Path, cache_path: Path, payload: dict[str, Any
     except OSError:
         return False
     return True
+
+
+def _atomic_write_json_with_error(
+    cache_dir: Path,
+    cache_path: Path,
+    payload: dict[str, Any],
+) -> tuple[bool, Exception | None]:
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+        tmp_path.replace(cache_path)
+    except OSError as exc:
+        return False, exc
+    return True, None
