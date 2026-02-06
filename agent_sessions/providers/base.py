@@ -67,6 +67,15 @@ class SessionProvider:
             return ()
         return iter_paths(self.base_dir, self.glob_patterns)
 
+    def cache_validation_paths(self) -> Iterable[Path]:
+        """
+        Paths that define cache freshness for this provider.
+
+        Defaults to transcript/session files discovered by ``session_paths``.
+        Providers with extra non-transcript sources can override this method.
+        """
+        return self.session_paths()
+
     def iter_events(self, path: Path) -> Iterator[dict]:
         """Override to customise event iteration for a path."""
         return iter(JsonlReader(path))

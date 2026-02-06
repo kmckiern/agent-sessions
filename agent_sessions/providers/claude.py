@@ -587,6 +587,17 @@ class ClaudeProvider(SessionProvider):
     def extra_sessions(self) -> Iterable[SessionRecord]:
         return _load_store_sessions(self.base_dir / "__store.db")
 
+    def cache_validation_paths(self) -> Iterable[Path]:
+        seen: set[Path] = set()
+        for path in self.session_paths():
+            if path in seen:
+                continue
+            seen.add(path)
+            yield path
+        store_db = self.base_dir / "__store.db"
+        if store_db not in seen:
+            yield store_db
+
     def _project_workdir_for(self, path: Path) -> str | None:
         try:
             relative = path.relative_to(self.base_dir / "projects")

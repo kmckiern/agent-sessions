@@ -9,8 +9,9 @@ from http.server import BaseHTTPRequestHandler
 from io import BytesIO
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
+import agent_sessions.server as server_module
 from agent_sessions.data_store import SessionService
 from agent_sessions.model import Message, SessionRecord
 from agent_sessions.providers.base import SessionProvider
@@ -170,3 +171,59 @@ def test_search_hits_endpoint_returns_snippets() -> None:
     assert hit["match_start"] == 0
     assert hit["match_length"] == 5
     assert "hello" in hit["snippet"].lower()
+
+
+def test_session_detail_endpoint_uses_cached_payload_on_second_open(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "s1.jsonl"
+    source.write_text('{"event":"x"}\n', encoding="utf-8")
+    record = SessionRecord(
+        provider="direct",
+        session_id="s1",
+        source_path=source,
+        started_at=datetime(2025, 10, 7, 15, tzinfo=timezone.utc),
+        updated_at=datetime(2025, 10, 7, 15, tzinfo=timezone.utc),
+        working_dir="/work",
+        model="gpt-5-codex",
+        messages=[Message(role="assistant", content="Hello world", created_at=None)],
+    )
+
+    class DirectProvider(StubProvider):
+        name = "direct"
+
+        def __init__(self, records: list[SessionRecord]) -> None:
+            self.direct_calls = 0
+            super().__init__(records)
+
+        def load_session_from_source_path(
+            self,
+            source_path: str,
+            session_id: str | None,
+        ) -> SessionRecord | None:
+            self.direct_calls += 1
+            if source_path != str(record.source_path):
+                return None
+            if session_id and session_id != record.session_id:
+                return None
+            return record
+
+    call_count = {"count": 0}
+    original = server_module.session_detail
+
+    def _counting_detail(session: SessionRecord) -> dict[str, object]:
+        call_count["count"] += 1
+        return original(session)
+
+    monkeypatch.setattr(server_module, "session_detail", _counting_detail)
+
+    provider = DirectProvider([record])
+    service = SessionService(providers=[provider], refresh_interval=None)
+    api = SessionApi(service)
+
+    path = f"/api/sessions/{record.provider}/{record.session_id}"
+    query = f"source_path={quote(str(record.source_path), safe='')}"
+
+    first = DummyHandler()
+    second = DummyHandler()
+    assert api.dispatch(cast(BaseHTTPRequestHandler, first), path, query)
+    assert api.dispatch(cast(BaseHTTPRequestHandler, second), path, query)
+    assert call_count["count"] == 1

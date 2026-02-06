@@ -4,6 +4,7 @@ Utilities for discovering and aggregating sessions across providers.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 from .model import SessionRecord
 from .providers import DEFAULT_PROVIDERS, SessionProvider
 from .providers.logging import debug_warning
+from .telemetry import log_event
 
 
 @dataclass
@@ -42,10 +44,25 @@ def load_sessions(
 
     records: list[SessionRecord] = []
     for provider in providers:
+        started = time.perf_counter()
         try:
-            records.extend(provider.sessions())
+            provider_records = list(provider.sessions())
+            records.extend(provider_records)
+            log_event(
+                "index.provider_load",
+                provider=provider.name,
+                sessions=len(provider_records),
+                load_ms=(time.perf_counter() - started) * 1000,
+            )
         except Exception as exc:
             debug_warning(f"Provider {provider.name} failed to load sessions", exc)
+            log_event(
+                "index.provider_load",
+                provider=provider.name,
+                status="error",
+                load_ms=(time.perf_counter() - started) * 1000,
+                error=str(exc),
+            )
             # Protect the aggregate view from single provider failures.
             continue
 
